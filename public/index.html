@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TodoLister</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="sidebar-nav">
+  <div class="sidebar-bar"></div>
+  <div class="sidebar-icons">
+    <button type="button" class="icon-link icon-link-active" onclick="router.go('dashboard')" title="Dashboard">
+      <span class="icon-glyph">⌂</span>
+    </button>
+    <button type="button" class="icon-link" onclick="openCreateProject()" title="New Project">
+      <span class="icon-glyph">＋</span>
+    </button>
+    <button type="button" class="icon-link" onclick="if(window._currentProject?.id){router.go('project', window._currentProject.id)}" title="Current Project">
+      <span class="icon-glyph">▣</span>
+    </button>
+    <button type="button" class="icon-link" onclick="if(router.current==='project'){openShareModal()}" title="Share Project">
+      <span class="icon-glyph">↗</span>
+    </button>
+  </div>
+</div>
+
+<button class="mobile-menu-btn" aria-label="Open menu" aria-expanded="false">
+  <span class="hamburger-line"></span>
+  <span class="hamburger-line"></span>
+  <span class="hamburger-line"></span>
+</button>
+
+<div class="mobile-menu-overlay">
+  <div class="mobile-menu-content">
+    <button type="button" class="mobile-menu-item" onclick="router.go('dashboard')">
+      <span>⌂</span>
+      <span>Dashboard</span>
+    </button>
+    <button type="button" class="mobile-menu-item" onclick="openCreateProject()">
+      <span>＋</span>
+      <span>New project</span>
+    </button>
+    <button type="button" class="mobile-menu-item" onclick="if(window._currentProject?.id){router.go('project', window._currentProject.id)}">
+      <span>▣</span>
+      <span>Current project</span>
+    </button>
+    <button type="button" class="mobile-menu-item" onclick="if(router.current==='project'){openShareModal()}">
+      <span>↗</span>
+      <span>Share project</span>
+    </button>
+  </div>
+</div>
+
+<header class="header">
+  <div class="header-logo" onclick="router.go('dashboard')">TodoLister</div>
+</header>
+
+<div class="main-shell">
+<div class="app" id="app">
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="topbar-logo" onclick="router.go('dashboard')">
+      <span class="logo-dot"></span>
+      TodoLister
+    </div>
+    <div class="topbar-actions" id="topbar-actions">
+      <!-- injected by JS -->
+    </div>
+  </header>
+
+  <!-- PAGES -->
+  <main id="main-content">
+
+    <!-- ── Dashboard ───────────────────────────────────────── -->
+    <div id="page-dashboard" class="hidden">
+      <div class="dashboard-header">
+        <div class="dashboard-title">
+          <h1>Projects</h1>
+          <small id="project-count">Loading...</small>
+        </div>
+        <div class="flex gap-2">
+          <button class="btn btn-outline btn-sm" onclick="openFilterModal()">⚙ Filter</button>
+          <button class="btn btn-primary" onclick="openCreateProject()">+ New Project</button>
+        </div>
+      </div>
+      <div id="projects-grid" class="projects-grid">
+        <div class="loader"><span class="spinner"></span> Loading projects...</div>
+      </div>
+    </div>
+
+    <!-- ── Project workspace ────────────────────────────────── -->
+    <div id="page-project" class="hidden">
+      <div class="project-header">
+        <div class="project-header-left">
+          <div class="project-header-name" id="proj-name">—</div>
+          <div class="project-header-sub" id="proj-meta"></div>
+        </div>
+        <div class="project-header-actions">
+          <button class="btn btn-ghost btn-sm" id="sidebar-toggle" onclick="toggleSidebar()">📋 Notes</button>
+          <button class="btn btn-outline btn-sm" onclick="openShareModal()">🔗 Share</button>
+          <button class="btn btn-ghost btn-sm" onclick="openEditProject()">✎ Edit</button>
+          <button class="btn btn-ghost btn-sm" onclick="router.go('dashboard')">← Back</button>
+        </div>
+      </div>
+
+      <div class="project-workspace">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+          <div class="sidebar-tabs">
+            <button class="sidebar-tab-btn active" onclick="switchSidebarTab('notes', this)">Notes</button>
+            <button class="sidebar-tab-btn" onclick="switchSidebarTab('info', this)">Info</button>
+          </div>
+          <div class="sidebar-content" id="sidebar-notes-panel">
+            <textarea id="sidebar-notes" placeholder="// your notes here..."></textarea>
+          </div>
+          <div class="sidebar-content hidden" id="sidebar-info-panel">
+            <div class="info-field">
+              <span class="info-label">Repository</span>
+              <span class="info-value" id="info-repo">—</span>
+            </div>
+            <div class="info-field">
+              <span class="info-label">Status</span>
+              <span class="info-value" id="info-status">—</span>
+            </div>
+            <div class="info-field">
+              <span class="info-label">Visibility</span>
+              <span class="info-value" id="info-visibility">—</span>
+            </div>
+            <div class="info-field">
+              <span class="info-label">Created</span>
+              <span class="info-value" id="info-created">—</span>
+            </div>
+            <div class="info-field">
+              <span class="info-label">Updated</span>
+              <span class="info-value" id="info-updated">—</span>
+            </div>
+            <div class="separator"></div>
+            <button class="btn btn-danger btn-sm" onclick="deleteProject()">🗑 Delete project</button>
+          </div>
+        </aside>
+
+        <!-- Board -->
+        <div class="board-container" id="board-container">
+          <div class="board-toolbar">
+            <span class="text-muted text-sm">Categories:</span>
+            <div id="category-toggles" class="flex gap-2" style="flex-wrap:wrap"></div>
+            <span class="text-muted text-sm" style="margin-left:.5rem">Statuses:</span>
+            <div id="status-toggles" class="flex gap-2" style="flex-wrap:wrap"></div>
+            <div class="board-toolbar-right">
+              <button class="btn btn-outline btn-sm" onclick="openAddCategory()">+ Category</button>
+              <button class="btn btn-outline btn-sm" onclick="openAddStatus()">+ Status</button>
+            </div>
+          </div>
+          <div class="board" id="board">
+            <div class="loader"><span class="spinner"></span> Loading board...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Guest password page ───────────────────────────────── -->
+    <div id="page-guest" class="hidden">
+      <div class="guest-box">
+        <div style="font-size:2rem;margin-bottom:.75rem">🔒</div>
+        <h2>Password Required</h2>
+        <p id="guest-project-name">This project is password-protected.</p>
+        <div class="guest-form">
+          <div class="form-group">
+            <input type="password" id="guest-password" class="input" placeholder="Enter share password..." onkeydown="if(event.key==='Enter')submitGuestAuth()">
+          </div>
+          <button class="btn btn-primary" onclick="submitGuestAuth()">Unlock →</button>
+          <div id="guest-error" class="text-red text-sm hidden"></div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+</div>
+
+<!-- ── Modals ──────────────────────────────────────────────── -->
+
+<!-- Create / Edit Project -->
+<div class="modal-overlay" id="modal-project">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-project-title">New Project</span>
+      <button class="btn btn-ghost btn-sm" onclick="closeModal('modal-project')">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="proj-edit-id">
+      <div class="form-group">
+        <label class="form-label">Project Name *</label>
+        <input type="text" id="proj-form-name" class="input" placeholder="My Awesome App">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description</label>
+        <textarea id="proj-form-desc" class="textarea" placeholder="What is this project about?"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Repository URL</label>
+        <input type="url" id="proj-form-repo" class="input" placeholder="https://github.com/...">
+      </div>
+      <div class="form-row form-row-2">
+        <div class="form-group">
+          <label class="form-label">Status</label>
+          <select id="proj-form-status" class="select">
+            <option value="in_dev">🔵 In Development</option>
+            <option value="to_fix">🟠 To Fix</option>
+            <option value="in_prod">🟢 In Production</option>
+            <option value="paused">⚫ Paused</option>
+            <option value="archived">📦 Archived</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Visibility</label>
+          <select id="proj-form-visibility" class="select" onchange="toggleSharePwField()">
+            <option value="private">🔴 Private</option>
+            <option value="public">🟢 Public</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group" id="share-pw-field">
+        <label class="form-label">Share Password (for public access)</label>
+        <input type="text" id="proj-form-sharepassword" class="input" placeholder="Leave empty to keep current password">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-project')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveProject()">Save Project</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Card -->
+<div class="modal-overlay" id="modal-card">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-card-title">New Card</span>
+      <button class="btn btn-ghost btn-sm" onclick="closeModal('modal-card')">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="card-edit-id">
+      <input type="hidden" id="card-category-id">
+      <input type="hidden" id="card-status-id">
+      <div class="form-group">
+        <label class="form-label">Title *</label>
+        <input type="text" id="card-form-title" class="input" placeholder="Card title...">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Description</label>
+        <textarea id="card-form-desc" class="textarea" placeholder="More details..."></textarea>
+      </div>
+      <div class="form-row form-row-2">
+        <div class="form-group">
+          <label class="form-label">Category</label>
+          <select id="card-form-category" class="select"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Status</label>
+          <select id="card-form-status" class="select"></select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Priority</label>
+        <select id="card-form-priority" class="select">
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-card')">Cancel</button>
+      <button class="btn btn-danger btn-sm" id="card-delete-btn" onclick="deleteCard()" style="margin-right:auto" class="hidden">Delete</button>
+      <button class="btn btn-primary" onclick="saveCard()">Save Card</button>
+    </div>
+  </div>
+</div>
+
+<!-- Share settings -->
+<div class="modal-overlay" id="modal-share">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Share Settings</span>
+      <button class="btn btn-ghost btn-sm" onclick="closeModal('modal-share')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="share-current-status"></div>
+      <div class="separator"></div>
+      <div class="form-group">
+        <label class="form-label">Guest Permission Level</label>
+        <select id="share-permission" class="select">
+          <option value="observer">👁 Observer (read only)</option>
+          <option value="card_mover">🖱 Card Mover (move cards only)</option>
+          <option value="editor">✏ Full Editor</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Shareable Link</label>
+        <div class="flex gap-2">
+          <input type="text" id="share-link" class="input" readonly style="font-size:.75rem">
+          <button class="btn btn-outline btn-sm" onclick="copyShareLink()">Copy</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" onclick="revokeAllGuests()">Revoke all guest sessions</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-share')">Close</button>
+      <button class="btn btn-primary" onclick="saveShareSettings()">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Category -->
+<div class="modal-overlay" id="modal-category">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-header">
+      <span class="modal-title">New Category</span>
+      <button class="btn btn-ghost btn-sm" onclick="closeModal('modal-category')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input type="text" id="cat-form-name" class="input" placeholder="e.g. DevOps">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Color</label>
+        <input type="color" id="cat-form-color" value="#00ff88" class="input" style="height:40px;padding:.25rem">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-category')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveCategory()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Status -->
+<div class="modal-overlay" id="modal-status">
+  <div class="modal" style="max-width:380px">
+    <div class="modal-header">
+      <span class="modal-title">New Status</span>
+      <button class="btn btn-ghost btn-sm" onclick="closeModal('modal-status')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input type="text" id="status-form-name" class="input" placeholder="e.g. In Review">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Color</label>
+        <input type="color" id="status-form-color" value="#555555" class="input" style="height:40px;padding:.25rem">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-status')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveStatus()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<script src="/api.js"></script>
+<script src="/dashboard.js"></script>
+<script src="/board.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

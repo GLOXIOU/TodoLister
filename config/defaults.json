@@ -1,0 +1,13 @@
+{
+  "categories": [
+    { "name": "Backend",  "color": "#00ff88", "position": 0 },
+    { "name": "Frontend", "color": "#00aaff", "position": 1 },
+    { "name": "Other",    "color": "#ff8800", "position": 2 }
+  ],
+  "statuses": [
+    { "name": "Idea",        "color": "#444",    "position": 0 },
+    { "name": "To Develop",  "color": "#0088ff", "position": 1 },
+    { "name": "To Fix",      "color": "#ff8800", "position": 2 },
+    { "name": "Done",        "color": "#00ff88", "position": 3 }
+  ]
+}
