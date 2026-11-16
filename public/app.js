@@ -2,51 +2,58 @@
 const router = {
   current: null,
 
-  go(page, param) {
-    // Hide all pages
+  /**
+   * Show a page. `push: false` is used when reacting to back/forward, so we
+   * don't add a new history entry for a URL the browser already shows.
+   */
+  go(page, param, { push = true } = {}) {
+    // Guests only ever see their shared project — there is no dashboard for them.
+    if (page === 'dashboard' && isShareUrl() && window._accessLevel !== 'owner') return;
+
+    flushNotes();
     document.querySelectorAll('[id^="page-"]').forEach(el => el.classList.add('hidden'));
 
     if (page === 'dashboard') {
       this.current = 'dashboard';
       document.title = 'TodoLister';
-      history.pushState({ page }, '', '/');
+      setUrl('/', push);
       document.getElementById('page-dashboard').classList.remove('hidden');
-      renderTopbar('dashboard');
       loadDashboard();
 
     } else if (page === 'project') {
       this.current = 'project';
+      // A guest stays on /share/:id; owners get a /project/:id permalink.
+      if (location.pathname !== `/share/${param}`) setUrl(`/project/${param}`, push);
       document.getElementById('page-project').classList.remove('hidden');
       loadProjectPage(param);
 
     } else if (page === 'guest') {
       this.current = 'guest';
+      setUrl(`/share/${param}`, push);
+      setAccessLevel(null);
+      document.title = 'Password required — TodoLister';
       document.getElementById('page-guest').classList.remove('hidden');
-      renderTopbar('guest');
-      document.getElementById('guest-project-name').textContent =
-        `Enter the password to access this project.`;
+      document.getElementById('guest-password').value = '';
+      document.getElementById('guest-error').classList.add('hidden');
       window._guestProjectId = param;
+      setTimeout(() => document.getElementById('guest-password').focus(), 50);
 
-    } else if (page === 'access-denied') {
-      document.getElementById('page-dashboard').classList.remove('hidden');
-      document.getElementById('page-dashboard').innerHTML = `
-        <div class="empty" style="padding:8rem">
-          <div class="empty-icon">🚫</div>
-          <h2 class="text-red" style="margin-bottom:.5rem">Access Denied</h2>
-          <p>This project is private and you are not authorized to view it.</p>
-        </div>`;
+    } else if (page === 'denied') {
+      this.current = 'denied';
+      setAccessLevel(null);
+      document.getElementById('page-denied').classList.remove('hidden');
     }
   }
 };
 
-/* ── Topbar render ───────────────────────────────────────────── */
-function renderTopbar(page) {
-  const el = document.getElementById('topbar-actions');
-  if (page === 'dashboard') {
-    el.innerHTML = '';
-  } else {
-    el.innerHTML = '';
-  }
+function isShareUrl() {
+  return /^\/share\/\d+/.test(location.pathname);
+}
+
+function setUrl(url, push) {
+  if (location.pathname === url) return;
+  if (push) history.pushState({}, '', url);
+  else history.replaceState({}, '', url);
 }
 
 /* ── Load project page ───────────────────────────────────────── */
@@ -55,28 +62,33 @@ async function loadProjectPage(projectId) {
   document.getElementById('proj-name').textContent = 'Loading...';
   document.getElementById('proj-meta').innerHTML   = '';
   document.getElementById('board').innerHTML       = '<div class="loader"><span class="spinner"></span></div>';
+  document.getElementById('sidebar-notes').value   = '';
+
+  // Per-project view filters start fresh.
+  hiddenCategories.clear();
+  hiddenStatuses.clear();
 
   try {
     const project = await API.getProject(projectId);
     window._currentProject = project;
+    setAccessLevel(project.access);
     document.title = `${project.name} — TodoLister`;
     renderProjectHeader(project);
     await Promise.all([
       loadBoard(projectId),
       loadNotes(projectId)
     ]);
-    // Reset hidden sets when switching projects
-    hiddenCategories.clear();
-    hiddenStatuses.clear();
-    renderToggles();
   } catch (err) {
     if (err.status === 401 && err.code === 'PASSWORD_REQUIRED') {
-      router.go('guest', projectId);
+      router.go('guest', projectId, { push: false });
     } else if (err.status === 403 && err.code === 'PRIVATE') {
-      router.go('access-denied');
+      router.go('denied');
+    } else if (err.status === 404) {
+      toast('Project not found.', 'error');
+      router.go('dashboard', null, { push: false });
     } else {
       toast(err.message || String(err), 'error');
-      router.go('dashboard');
+      router.go('dashboard', null, { push: false });
     }
   }
 }
@@ -90,55 +102,100 @@ const STATUS_MAP = {
   archived: { label: '📦 Archived',        cls: 'badge-archived' },
 };
 
+const GUEST_ACCESS_LABELS = {
+  observer:   '👁 Read only',
+  card_mover: '🖱 Can move cards',
+  editor:     '✏ Can edit'
+};
+
 function renderProjectHeader(p) {
   document.getElementById('proj-name').textContent = p.name;
   const st  = STATUS_MAP[p.status] || { label: p.status, cls: '' };
   const vis = p.visibility === 'public' ? '🌐 Public' : '🔒 Private';
+  const guestBadge = GUEST_ACCESS_LABELS[p.access]
+    ? `<span class="badge badge-guest" title="Your access to this shared project">${GUEST_ACCESS_LABELS[p.access]}</span>`
+    : '';
   document.getElementById('proj-meta').innerHTML = `
-    <span class="badge ${st.cls}">${st.label}</span>
-    <span class="badge badge-${p.visibility}">${vis}</span>
-    ${p.repo_url ? `<a href="${esc(p.repo_url)}" target="_blank" class="text-sm text-muted" style="display:flex;align-items:center;gap:.3rem">⌥ Repo</a>` : ''}
+    <span class="badge ${st.cls}">${esc(st.label)}</span>
+    <span class="badge badge-${esc(p.visibility)}">${vis}</span>
+    ${guestBadge}
+    ${p.repo_url ? `<a href="${esc(safeUrl(p.repo_url))}" target="_blank" rel="noopener noreferrer" class="text-sm text-muted" style="display:flex;align-items:center;gap:.3rem">⌥ Repo</a>` : ''}
   `;
 
   // Update sidebar info
-  document.getElementById('info-status').innerHTML    = `<span class="badge ${st.cls}">${st.label}</span>`;
-  document.getElementById('info-visibility').innerHTML = `<span class="badge badge-${p.visibility}">${vis}</span>`;
-  document.getElementById('info-created').textContent = fmtDate(p.created_at);
-  document.getElementById('info-updated').textContent = fmtDate(p.updated_at);
+  document.getElementById('info-status').innerHTML     = `<span class="badge ${st.cls}">${esc(st.label)}</span>`;
+  document.getElementById('info-visibility').innerHTML = `<span class="badge badge-${esc(p.visibility)}">${vis}</span>`;
+  document.getElementById('info-created').textContent  = fmtDate(p.created_at);
+  document.getElementById('info-updated').textContent  = fmtDate(p.updated_at);
   if (p.repo_url) {
-    document.getElementById('info-repo').innerHTML = `<a href="${esc(p.repo_url)}" target="_blank">${esc(p.repo_url)}</a>`;
+    document.getElementById('info-repo').innerHTML =
+      `<a href="${esc(safeUrl(p.repo_url))}" target="_blank" rel="noopener noreferrer">${esc(p.repo_url)}</a>`;
   } else {
     document.getElementById('info-repo').textContent = '—';
   }
 }
 
-/* ── Notes ───────────────────────────────────────────────────── */
-let _notesTimer = null;
+/* ── Notes (autosaved) ───────────────────────────────────────── */
+let _notesTimer   = null;
+let _notesPending = null; // { pid, content } waiting to be saved
 
 async function loadNotes(projectId) {
   try {
     const data = await API.getNotes(projectId);
-    document.getElementById('sidebar-notes').value = data.content || '';
+    if (window._currentProject?.id === projectId) {
+      document.getElementById('sidebar-notes').value = data.content || '';
+    }
   } catch (_) {}
 }
 
-document.getElementById('sidebar-notes').addEventListener('input', () => {
+async function saveNotesNow() {
   clearTimeout(_notesTimer);
-  _notesTimer = setTimeout(async () => {
-    const pid = window._currentProject?.id;
-    if (!pid) return;
-    const content = document.getElementById('sidebar-notes').value;
-    try {
-      await API.saveNotes(pid, content);
-    } catch (_) {}
-  }, 800);
+  const pending = _notesPending;
+  _notesPending = null;
+  if (!pending) return;
+  try {
+    await API.saveNotes(pending.pid, pending.content);
+  } catch (e) {
+    toast('Notes not saved: ' + e.message, 'error');
+  }
+}
+
+/** Save pending notes right away (before switching project / leaving). */
+function flushNotes() {
+  if (_notesPending) saveNotesNow();
+}
+
+document.getElementById('sidebar-notes').addEventListener('input', e => {
+  const pid = window._currentProject?.id;
+  if (!pid || !can('editor')) return;
+  // Bind the content to the project it was typed in.
+  _notesPending = { pid, content: e.target.value };
+  clearTimeout(_notesTimer);
+  _notesTimer = setTimeout(saveNotesNow, 800);
+});
+
+// Closing the tab within the debounce window: send the last edit anyway.
+window.addEventListener('pagehide', () => {
+  if (!_notesPending) return;
+  const { pid, content } = _notesPending;
+  _notesPending = null;
+  fetch(`/api/projects/${pid}/notes`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    keepalive: true,
+    body: JSON.stringify({ content })
+  }).catch(() => {});
 });
 
 /* ── Sidebar ─────────────────────────────────────────────────── */
-let _sidebarOpen = true;
 function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
-  sidebar.classList.toggle('mobile-open');
+  if (window.matchMedia('(max-width: 768px)').matches) {
+    sidebar.classList.toggle('mobile-open');
+  } else {
+    sidebar.classList.toggle('collapsed');
+  }
 }
 
 function switchSidebarTab(tab, btn) {
@@ -150,8 +207,8 @@ function switchSidebarTab(tab, btn) {
 
 /* ── Guest auth ──────────────────────────────────────────────── */
 async function submitGuestAuth() {
-  const pid = window._guestProjectId;
-  const pw  = document.getElementById('guest-password').value;
+  const pid   = window._guestProjectId;
+  const pw    = document.getElementById('guest-password').value;
   const errEl = document.getElementById('guest-error');
   errEl.classList.add('hidden');
 
@@ -159,7 +216,7 @@ async function submitGuestAuth() {
 
   try {
     await API.shareAuth(pid, pw);
-    router.go('project', pid);
+    router.go('project', pid, { push: false });
   } catch (e) {
     errEl.textContent = e.message || 'Wrong password.';
     errEl.classList.remove('hidden');
@@ -170,28 +227,22 @@ async function submitGuestAuth() {
 function init() {
   const path = window.location.pathname;
 
-  // /share/:projectId — guest access
-  const shareMatch = path.match(/^\/share\/(\d+)/);
-  if (shareMatch) {
-    router.go('guest', parseInt(shareMatch[1]));
-    return;
-  }
-
-  // /project/:id — direct project link (only for whitelisted)
-  const projMatch = path.match(/^\/project\/(\d+)/);
+  // /share/:id — try the project directly; falls back to the password form.
+  // /project/:id — direct project link.
+  const projMatch = path.match(/^\/(?:share|project)\/(\d+)/);
   if (projMatch) {
-    router.go('project', parseInt(projMatch[1]));
+    router.go('project', parseInt(projMatch[1]), { push: false });
     return;
   }
 
-  // Default: dashboard
-  router.go('dashboard');
+  router.go('dashboard', null, { push: false });
 }
 
 // Browser back/forward
 window.addEventListener('popstate', () => init());
 
 // Start
+applyAccessUI();
 init();
 
 /* ── Mobile navigation (PlaylistConverter-style) ─────────────── */

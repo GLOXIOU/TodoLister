@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS `projects` (
   `status`      ENUM('in_dev','to_fix','in_prod','paused','archived') NOT NULL DEFAULT 'in_dev',
   `visibility`  ENUM('private','public') NOT NULL DEFAULT 'private',
   `share_password_hash` VARCHAR(255) DEFAULT NULL,
+  `guest_permission` ENUM('observer','card_mover','editor') NOT NULL DEFAULT 'observer',
   `created_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -77,6 +78,9 @@ CREATE TABLE IF NOT EXISTS `notes` (
 
 -- --------------------------------------------------------
 -- Guest Sessions (public project access)
+-- session_token holds a SHA-256 of the cookie value, never the raw token.
+-- The effective permission is projects.guest_permission; `permission` here
+-- only records the level granted when the session was opened.
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `guest_sessions` (
   `id`           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

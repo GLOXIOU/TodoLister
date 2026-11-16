@@ -9,33 +9,22 @@ const API = {
     };
     if (body !== undefined) opts.body = JSON.stringify(body);
 
-    const res = await fetch('/api' + path, opts);
+    const res  = await fetch('/api' + path, opts);
+    const data = await res.json().catch(() => null);
 
-    // If access denied, redirect to home
-    if (res.status === 403) {
-      const data = await res.json().catch(() => ({}));
-      if (data.error === 'ACCESS_DENIED') {
-        window.location.href = '/';
-        return;
-      }
-      if (data.error === 'PRIVATE') {
-        throw { status: 403, code: 'PRIVATE', message: data.message };
-      }
-    }
-    if (res.status === 401) {
-      const data = await res.json().catch(() => ({}));
-      throw { status: 401, code: data.error, message: data.message };
+    // IP not whitelisted: let the server show its block page.
+    if (res.status === 403 && data?.error === 'ACCESS_DENIED') {
+      window.location.href = '/';
+      return new Promise(() => {}); // page is navigating away
     }
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(
-        err.error ||
-        err.message ||
-        (err.code ? `Request failed (${err.code})` : `Request failed (${res.status})`)
-      );
+      const err  = new Error(data?.message || data?.error || `Request failed (${res.status})`);
+      err.status = res.status;
+      err.code   = data?.error;
+      throw err;
     }
-    return res.json();
+    return data;
   },
 
   get:    (path)        => API.request('GET',    path),
@@ -54,13 +43,16 @@ const API = {
   getBoard:       (pid)   => API.get(`/projects/${pid}/board`),
   createCard:     (pid,d) => API.post(`/projects/${pid}/cards`, d),
   updateCard:     (pid,id,d) => API.put(`/projects/${pid}/cards/${id}`, d),
+  moveCard:       (pid,id,d) => API.post(`/projects/${pid}/cards/${id}/move`, d),
   deleteCard:     (pid,id)   => API.delete(`/projects/${pid}/cards/${id}`),
   createCategory: (pid,d) => API.post(`/projects/${pid}/categories`, d),
   updateCategory: (pid,id,d) => API.put(`/projects/${pid}/categories/${id}`, d),
   deleteCategory: (pid,id)   => API.delete(`/projects/${pid}/categories/${id}`),
+  reorderCategories: (pid,ids) => API.put(`/projects/${pid}/categories/order`, { ids }),
   createStatus:   (pid,d) => API.post(`/projects/${pid}/statuses`, d),
   updateStatus:   (pid,id,d) => API.put(`/projects/${pid}/statuses/${id}`, d),
   deleteStatus:   (pid,id)   => API.delete(`/projects/${pid}/statuses/${id}`),
+  reorderStatuses:   (pid,ids) => API.put(`/projects/${pid}/statuses/order`, { ids }),
 
   // Notes
   getNotes:       (pid)   => API.get(`/projects/${pid}/notes`),
@@ -71,6 +63,31 @@ const API = {
   setPermission:   (pid, p)  => API.put(`/share/${pid}/permission`, { permission: p }),
   revokeGuests:    (pid)     => API.delete(`/share/${pid}/revoke`),
 };
+
+/* ── Access level (owner = whitelisted IP, else guest level) ── */
+const ACCESS_LEVELS = { observer: 0, card_mover: 1, editor: 2, owner: 3 };
+window._accessLevel = null; // unknown until the server tells us
+
+function can(level) {
+  const mine = ACCESS_LEVELS[window._accessLevel];
+  return mine !== undefined && mine >= ACCESS_LEVELS[level];
+}
+
+/** Show/hide every element tagged data-requires="<level>". */
+function applyAccessUI() {
+  document.querySelectorAll('[data-requires]').forEach(el => {
+    el.classList.toggle('hidden', !can(el.dataset.requires));
+  });
+  const notes = document.getElementById('sidebar-notes');
+  notes.readOnly    = !can('editor');
+  notes.placeholder = can('editor') ? '// your notes here...' : '// no notes yet';
+  document.body.dataset.access = window._accessLevel || 'none';
+}
+
+function setAccessLevel(level) {
+  window._accessLevel = level;
+  applyAccessUI();
+}
 
 /* ── Toast ───────────────────────────────────────────────────── */
 function toast(msg, type = 'ok') {
@@ -86,12 +103,18 @@ function openModal(id) {
   document.getElementById(id).classList.add('open');
 }
 function closeModal(id) {
-  document.getElementById(id).classList.remove('open');
+  const modal = document.getElementById(id);
+  modal.classList.remove('open');
+  // A hidden modal must not keep focus (and blurring commits pending field edits).
+  if (modal.contains(document.activeElement)) document.activeElement.blur();
 }
-// Close modal on overlay click
+// Close modal on overlay click or Escape
 document.addEventListener('click', e => {
-  if (e.target.classList.contains('modal-overlay')) {
-    e.target.classList.remove('open');
+  if (e.target.classList.contains('modal-overlay')) closeModal(e.target.id);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-overlay.open').forEach(m => closeModal(m.id));
   }
 });
 
@@ -110,4 +133,25 @@ function timeAgo(str) {
   if (h < 24)  return `${h}h ago`;
   const d = Math.floor(h / 24);
   return `${d}d ago`;
+}
+
+/* ── Escaping / sanitising helpers ───────────────────────────── */
+function esc(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Only http(s) links are rendered as hrefs (no javascript: URLs). */
+function safeUrl(url) {
+  return /^https?:\/\//i.test(url || '') ? url : '#';
+}
+
+/** Only hex colors are injected into style attributes. */
+function safeColor(color) {
+  return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(color || '') ? color : '#888888';
 }

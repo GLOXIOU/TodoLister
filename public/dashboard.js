@@ -7,9 +7,10 @@ async function loadDashboard() {
   grid.innerHTML = '<div class="loader"><span class="spinner"></span> Loading...</div>';
   try {
     allProjects = await API.getProjects();
-    renderProjects(allProjects);
+    setAccessLevel('owner'); // only whitelisted IPs can list projects
+    applyDashboardFilters();
   } catch (e) {
-    grid.innerHTML = `<div class="empty"><div class="empty-icon">⚠</div><p>${e.message}</p></div>`;
+    grid.innerHTML = `<div class="empty"><div class="empty-icon">⚠</div><p>${esc(e.message)}</p></div>`;
   }
 }
 
@@ -21,17 +22,38 @@ const STATUS_LABELS = {
   archived: '📦 Archived'
 };
 
-function renderProjects(projects) {
-  const grid = document.getElementById('projects-grid');
+/* ── Search & status filter ──────────────────────────────────── */
+function applyDashboardFilters() {
+  const query  = document.getElementById('dash-search').value.trim().toLowerCase();
+  const status = document.getElementById('dash-status-filter').value;
+  const filtered = allProjects.filter(p =>
+    (status === 'all' || p.status === status) &&
+    (!query || [p.name, p.description, p.repo_url].some(f => (f || '').toLowerCase().includes(query)))
+  );
+  renderProjects(filtered, { filtered: Boolean(query) || status !== 'all' });
+}
+
+document.getElementById('dash-search').addEventListener('input', applyDashboardFilters);
+document.getElementById('dash-status-filter').addEventListener('change', applyDashboardFilters);
+
+function renderProjects(projects, { filtered = false } = {}) {
+  const grid  = document.getElementById('projects-grid');
   const count = document.getElementById('project-count');
-  count.textContent = `${projects.length} project${projects.length !== 1 ? 's' : ''}`;
+  const total = allProjects.length;
+  count.textContent = filtered
+    ? `${projects.length} of ${total} project${total !== 1 ? 's' : ''}`
+    : `${total} project${total !== 1 ? 's' : ''}`;
 
   if (!projects.length) {
-    grid.innerHTML = `
-      <div class="empty" style="grid-column:1/-1">
-        <div class="empty-icon">📋</div>
-        <p>No projects yet.<br>Create your first one!</p>
-      </div>`;
+    grid.innerHTML = filtered
+      ? `<div class="empty" style="grid-column:1/-1">
+           <div class="empty-icon">🔍</div>
+           <p>No project matches these filters.</p>
+         </div>`
+      : `<div class="empty" style="grid-column:1/-1">
+           <div class="empty-icon">📋</div>
+           <p>No projects yet.<br>Create your first one!</p>
+         </div>`;
     return;
   }
 
@@ -44,15 +66,15 @@ function renderProjects(projects) {
       <div class="project-card-header">
         <div class="project-card-name">${esc(p.name)}</div>
         <div class="flex gap-2">
-          <span class="badge badge-${p.status}">${STATUS_LABELS[p.status] || p.status}</span>
-          <span class="badge badge-${p.visibility}">${p.visibility === 'public' ? '🌐' : '🔒'}</span>
+          <span class="badge badge-${esc(p.status)}">${STATUS_LABELS[p.status] || esc(p.status)}</span>
+          <span class="badge badge-${esc(p.visibility)}">${p.visibility === 'public' ? '🌐' : '🔒'}</span>
         </div>
       </div>
       ${p.description ? `<div class="project-card-desc">${esc(p.description)}</div>` : ''}
       <div class="project-card-footer">
         ${p.repo_url ? `<div class="project-card-repo">
           <span>⌥</span>
-          <a href="${esc(p.repo_url)}" target="_blank" onclick="event.stopPropagation()" title="${esc(p.repo_url)}">
+          <a href="${esc(safeUrl(p.repo_url))}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" title="${esc(p.repo_url)}">
             <span>${esc(p.repo_url.replace(/^https?:\/\//, ''))}</span>
           </a>
         </div>` : '<span></span>'}
@@ -94,9 +116,20 @@ function openEditProject() {
   openModal('modal-project');
 }
 
+/** True when the project being edited already has a share password. */
+function editedProjectHasPassword() {
+  const id = document.getElementById('proj-edit-id').value;
+  return Boolean(id && window._currentProject?.id == id && window._currentProject.has_share_password);
+}
+
 function toggleSharePwField() {
-  const vis = document.getElementById('proj-form-visibility').value;
-  document.getElementById('share-pw-field').style.display = vis === 'public' ? '' : 'none';
+  const isPublic = document.getElementById('proj-form-visibility').value === 'public';
+  document.getElementById('share-pw-field').style.display = isPublic ? '' : 'none';
+  const hasPw = editedProjectHasPassword();
+  document.getElementById('proj-form-sharepassword').placeholder =
+    hasPw ? 'Leave empty to keep current password' : 'At least 4 characters (required)';
+  document.getElementById('share-pw-hint').textContent =
+    hasPw ? 'Changing the password logs out every connected guest.' : '';
 }
 
 async function saveProject() {
@@ -114,24 +147,33 @@ async function saveProject() {
   const pw = document.getElementById('proj-form-sharepassword').value.trim();
   if (pw) data.share_password = pw;
 
+  if (data.visibility === 'public' && !pw && !editedProjectHasPassword()) {
+    toast('Set a share password to make the project public.', 'error');
+    document.getElementById('proj-form-sharepassword').focus();
+    return;
+  }
+  if (data.repo_url && !/^https?:\/\//i.test(data.repo_url)) {
+    toast('Repository URL must start with http:// or https://', 'error');
+    return;
+  }
+
   try {
     if (id) {
-      await API.updateProject(id, data);
-      toast('Project updated ✓');
-      // Refresh project header if we're on the project page
-      if (window._currentProject) {
-        window._currentProject = { ...window._currentProject, ...data };
+      const res = await API.updateProject(id, data);
+      toast(res.guests_revoked ? 'Project updated ✓ — guest sessions were logged out' : 'Project updated ✓');
+      closeModal('modal-project');
+      // Refresh from the server so has_share_password etc. are accurate.
+      if (window._currentProject?.id == id) {
+        window._currentProject = await API.getProject(id);
         renderProjectHeader(window._currentProject);
       }
+      if (router.current === 'dashboard') loadDashboard();
     } else {
       const res = await API.createProject(data);
       toast('Project created ✓');
       closeModal('modal-project');
       router.go('project', res.id);
-      return;
     }
-    closeModal('modal-project');
-    if (router.current === 'dashboard') loadDashboard();
   } catch (e) {
     toast(e.message, 'error');
   }
@@ -150,40 +192,42 @@ async function deleteProject() {
   }
 }
 
-function openFilterModal() {
-  // Simple inline filter by status for now
-  const statuses = ['all', 'in_dev', 'to_fix', 'in_prod', 'paused', 'archived'];
-  const current  = window._dashFilter || 'all';
-  const next     = statuses[(statuses.indexOf(current) + 1) % statuses.length];
-  window._dashFilter = next;
-  const filtered = next === 'all' ? allProjects : allProjects.filter(p => p.status === next);
-  renderProjects(filtered);
-  toast(next === 'all' ? 'Showing all projects' : `Filtered: ${STATUS_LABELS[next]}`, 'warn');
-}
-
 /* ── Share modal ─────────────────────────────────────────────── */
 function openShareModal() {
   const p = window._currentProject;
-  if (!p) return;
+  if (!p || !can('owner')) return;
 
-  const statusEl = document.getElementById('share-current-status');
-  statusEl.innerHTML = `
+  const isPublic = p.visibility === 'public';
+  document.getElementById('share-current-status').innerHTML = `
     <div class="flex gap-2 items-center">
-      <span class="badge badge-${p.visibility}">${p.visibility === 'public' ? '🌐 Public' : '🔒 Private'}</span>
-      ${p.visibility === 'private'
-        ? '<span class="text-sm text-muted">This project is private. Only whitelisted IPs can access it.</span>'
-        : '<span class="text-sm text-muted">Anyone with the link and password can access this project.</span>'}
+      <span class="badge badge-${esc(p.visibility)}">${isPublic ? '🌐 Public' : '🔒 Private'}</span>
+      <span class="text-sm text-muted">${isPublic
+        ? 'Anyone with the link and password can access this project.'
+        : 'This project is private. Only whitelisted IPs can access it.'}</span>
     </div>
   `;
 
-  const link = `${window.location.origin}/share/${p.id}`;
-  document.getElementById('share-link').value = link;
+  const warning = document.getElementById('share-warning');
+  if (!isPublic) {
+    warning.innerHTML = 'To share it, click <b>✎ Edit</b>, set the visibility to <b>Public</b> and choose a share password.';
+    warning.classList.remove('hidden');
+  } else if (!p.has_share_password) {
+    warning.textContent = 'No share password is set — guests cannot unlock the project. Set one via ✎ Edit.';
+    warning.classList.remove('hidden');
+  } else {
+    warning.classList.add('hidden');
+  }
+
+  document.getElementById('share-permission').value = p.guest_permission || 'observer';
+  document.getElementById('share-link').value = `${window.location.origin}/share/${p.id}`;
   openModal('modal-share');
 }
 
 function copyShareLink() {
   const input = document.getElementById('share-link');
-  navigator.clipboard.writeText(input.value).then(() => toast('Link copied ✓'));
+  navigator.clipboard.writeText(input.value)
+    .then(() => toast('Link copied ✓'))
+    .catch(() => { input.select(); toast('Press Ctrl+C to copy', 'warn'); });
 }
 
 async function saveShareSettings() {
@@ -192,6 +236,7 @@ async function saveShareSettings() {
   const perm = document.getElementById('share-permission').value;
   try {
     await API.setPermission(p.id, perm);
+    p.guest_permission = perm;
     toast('Permission updated ✓');
     closeModal('modal-share');
   } catch (e) {
@@ -204,20 +249,10 @@ async function revokeAllGuests() {
   if (!p) return;
   if (!confirm('Revoke all guest sessions for this project?')) return;
   try {
-    await API.revokeGuests(p.id);
-    toast('All guest sessions revoked');
+    const res = await API.revokeGuests(p.id);
+    toast(`Guest sessions revoked (${res.revoked ?? 0})`);
     closeModal('modal-share');
   } catch (e) {
     toast(e.message, 'error');
   }
-}
-
-/* ── Escape helper ───────────────────────────────────────────── */
-function esc(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }

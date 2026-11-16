@@ -437,6 +437,12 @@ h3 {
   border-color: rgba(231, 76, 60, 0.26);
 }
 
+.badge-guest {
+  color: #d9c8ff;
+  background: rgba(155, 109, 255, 0.17);
+  border-color: rgba(155, 109, 255, 0.3);
+}
+
 .input,
 .select,
 .textarea {
@@ -531,6 +537,25 @@ h3 {
   font-size: 0.88rem;
   margin-top: 0.3rem;
   display: inline-block;
+}
+
+.dashboard-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dashboard-controls .input,
+.dashboard-controls .select {
+  width: auto;
+  min-width: 170px;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.dashboard-controls .input {
+  min-width: 220px;
 }
 
 .projects-grid {
@@ -902,6 +927,18 @@ h3 {
   cursor: grabbing;
 }
 
+.k-card.k-card-static {
+  cursor: pointer;
+}
+
+.drop-placeholder {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--spotify);
+  box-shadow: 0 0 10px rgba(29, 185, 84, 0.7);
+  pointer-events: none;
+}
+
 .k-card-title {
   font-size: 0.9rem;
   font-weight: 700;
@@ -1030,6 +1067,111 @@ h3 {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+/* Share modal warning */
+.share-warning {
+  margin-top: 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(243, 156, 18, 0.35);
+  background: rgba(243, 156, 18, 0.12);
+  color: #ffd59a;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  padding: 0.65rem 0.8rem;
+}
+
+/* Board settings modal */
+.lane-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.lane-manager-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lane-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.lane-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.lane-row .lane-name {
+  padding: 0.45rem 0.65rem;
+  font-size: 0.88rem;
+}
+
+.lane-color {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.lane-color::-webkit-color-swatch-wrapper {
+  padding: 3px;
+}
+
+.lane-color::-webkit-color-swatch {
+  border: none;
+  border-radius: 5px;
+}
+
+.lane-count {
+  min-width: 2.2em;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 999px;
+  padding: 0.25em 0.5em;
+}
+
+.lane-row .k-card-btn {
+  width: 28px;
+  height: 28px;
+  font-size: 0.9rem;
+}
+
+.lane-row .k-card-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+  background: transparent;
+}
+
+.lane-row .lane-delete:hover {
+  color: #ff8a80;
+}
+
+/* Read-only form fields (card view for guests) */
+.input:disabled,
+.select:disabled,
+.textarea:disabled,
+#sidebar-notes:read-only {
+  opacity: 0.85;
+  cursor: default;
+}
+
+/* Desktop: the Notes button collapses the sidebar */
+@media (min-width: 769px) {
+  .sidebar.collapsed {
+    display: none;
+  }
 }
 
 /* Modal / toast / helpers */
@@ -1302,6 +1444,19 @@ h3 {
     align-items: flex-start;
     flex-direction: column;
     text-align: left;
+  }
+
+  .dashboard-controls {
+    width: 100%;
+  }
+
+  .dashboard-controls .input {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .dashboard-controls .select {
+    flex: 1 1 auto;
   }
 
   #page-project {

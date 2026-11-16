@@ -5,141 +5,139 @@ const router   = express.Router();
 const db       = require('../db');
 const bcrypt   = require('bcryptjs');
 const defaults = require('../config/defaults.json');
-const { formatDbError } = require('../utils/dbError');
+const v        = require('../utils/validate');
+const { wrap, badRequest, notFound } = require('../utils/http');
+const { withTransaction } = require('../utils/transaction');
+const { ownerOnly, resolveAccess } = require('../middleware/guestAuth');
+
+const PUBLIC_FIELDS = 'id, name, description, repo_url, status, visibility, created_at, updated_at';
+const OWNER_FIELDS  = `${PUBLIC_FIELDS}, guest_permission, (share_password_hash IS NOT NULL) AS has_share_password`;
+
+function toOwnerJson(row) {
+  return { ...row, has_share_password: Boolean(row.has_share_password) };
+}
 
 // ── List all projects ─────────────────────────────────────────────────────────
-router.get('/', async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT id, name, description, repo_url, status, visibility, created_at, updated_at
-       FROM projects ORDER BY updated_at DESC`
-    );
-    res.json(rows);
-  } catch (e) {
-    res.status(500).json({ error: formatDbError(e), code: e?.code || 'INTERNAL' });
-  }
-});
+router.get('/', ownerOnly, wrap(async (req, res) => {
+  const [rows] = await db.query(`SELECT ${OWNER_FIELDS} FROM projects ORDER BY updated_at DESC`);
+  res.json(rows.map(toOwnerJson));
+}));
 
 // ── Get single project ────────────────────────────────────────────────────────
-router.get('/:id', async (req, res) => {
-  try {
-    const [rows] = await db.query(
-      `SELECT id, name, description, repo_url, status, visibility, created_at, updated_at
-       FROM projects WHERE id = ? LIMIT 1`, [req.params.id]
-    );
-    if (!rows.length) return res.status(404).json({ error: 'NOT_FOUND' });
+// Owners get share settings; guests get the public fields plus their level.
+router.get('/:id', wrap(async (req, res) => {
+  const id = v.parseId(req.params.id);
+  if (!id) throw notFound('Project not found.');
 
-    const project = rows[0];
+  const access  = await resolveAccess(req, id);
+  const isOwner = access === 'owner';
+  const [rows]  = await db.query(
+    `SELECT ${isOwner ? OWNER_FIELDS : PUBLIC_FIELDS} FROM projects WHERE id = ? LIMIT 1`, [id]
+  );
+  if (!rows.length) throw notFound('Project not found.');
 
-    // Non-whitelisted guests can only see public projects they have a token for
-    if (!req.isWhitelisted) {
-      if (project.visibility === 'private') {
-        return res.status(403).json({ error: 'PRIVATE', message: 'This project is private.' });
-      }
-      if (!req.guest || req.guest.project_id !== project.id) {
-        return res.status(401).json({ error: 'PASSWORD_REQUIRED' });
-      }
-    }
-
-    res.json(project);
-  } catch (e) {
-    res.status(500).json({ error: formatDbError(e), code: e?.code || 'INTERNAL' });
-  }
-});
+  res.json({ ...(isOwner ? toOwnerJson(rows[0]) : rows[0]), access });
+}));
 
 // ── Create project ────────────────────────────────────────────────────────────
-router.post('/', async (req, res) => {
-  if (!req.isWhitelisted) return res.status(403).json({ error: 'FORBIDDEN' });
-  const { name, description, repo_url, status, visibility, share_password } = req.body;
-  if (!name) return res.status(400).json({ error: 'Name is required.' });
+router.post('/', ownerOnly, wrap(async (req, res) => {
+  const b = req.body || {};
+  const name             = v.text(b.name, 'Name', 120, { required: true });
+  const description      = v.text(b.description, 'Description', 10000) ?? null;
+  const repo_url         = v.httpUrl(b.repo_url, 'Repository URL') ?? null;
+  const status           = v.oneOf(b.status, 'status', v.PROJECT_STATUSES) ?? 'in_dev';
+  const visibility       = v.oneOf(b.visibility, 'visibility', v.VISIBILITIES) ?? 'private';
+  const guest_permission = v.oneOf(b.guest_permission, 'guest_permission', v.GUEST_PERMISSIONS) ?? 'observer';
+  const password         = v.sharePassword(b.share_password);
 
-  let hash = null;
-  if (visibility === 'public' && share_password) {
-    hash = await bcrypt.hash(share_password, 10);
+  if (visibility === 'public' && !password) {
+    throw badRequest('A share password is required for public projects.');
   }
+  const hash = password ? await bcrypt.hash(password, 10) : null;
 
-  let conn = null;
-  try {
-    conn = await db.getConnection();
-    await conn.beginTransaction();
-
+  const projectId = await withTransaction(async conn => {
     const [result] = await conn.query(
-      `INSERT INTO projects (name, description, repo_url, status, visibility, share_password_hash)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [name, description || null, repo_url || null, status || 'in_dev', visibility || 'private', hash]
+      `INSERT INTO projects (name, description, repo_url, status, visibility, share_password_hash, guest_permission)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [name, description, repo_url, status, visibility, hash, guest_permission]
     );
-    const projectId = result.insertId;
+    const pid = result.insertId;
 
     // Seed default categories & statuses
-    for (const cat of defaults.categories) {
-      await conn.query(
-        `INSERT INTO categories (project_id, name, color, position) VALUES (?, ?, ?, ?)`,
-        [projectId, cat.name, cat.color, cat.position]
-      );
-    }
-    for (const st of defaults.statuses) {
-      await conn.query(
-        `INSERT INTO statuses (project_id, name, color, position) VALUES (?, ?, ?, ?)`,
-        [projectId, st.name, st.color, st.position]
-      );
-    }
-    // Empty note
-    await conn.query(`INSERT INTO notes (project_id, content) VALUES (?, '')`, [projectId]);
+    await conn.query(
+      'INSERT INTO categories (project_id, name, color, position) VALUES ?',
+      [defaults.categories.map(c => [pid, c.name, c.color, c.position])]
+    );
+    await conn.query(
+      'INSERT INTO statuses (project_id, name, color, position) VALUES ?',
+      [defaults.statuses.map(s => [pid, s.name, s.color, s.position])]
+    );
+    await conn.query(`INSERT INTO notes (project_id, content) VALUES (?, '')`, [pid]);
+    return pid;
+  });
 
-    await conn.commit();
-    res.status(201).json({ id: projectId });
-  } catch (e) {
-    if (conn) await conn.rollback();
-    res.status(500).json({ error: formatDbError(e), code: e?.code || 'INTERNAL' });
-  } finally {
-    if (conn) conn.release();
-  }
-});
+  res.status(201).json({ id: projectId });
+}));
 
 // ── Update project ────────────────────────────────────────────────────────────
-router.put('/:id', async (req, res) => {
-  if (!req.isWhitelisted) return res.status(403).json({ error: 'FORBIDDEN' });
-  const { name, description, repo_url, status, visibility, share_password, guest_permission } = req.body;
+router.put('/:id', ownerOnly, wrap(async (req, res) => {
+  const id = v.parseId(req.params.id);
+  if (!id) throw notFound('Project not found.');
 
-  try {
-    // Build dynamic update
-    const fields = [];
-    const vals   = [];
+  const [existingRows] = await db.query(
+    'SELECT visibility, share_password_hash FROM projects WHERE id = ? LIMIT 1', [id]
+  );
+  if (!existingRows.length) throw notFound('Project not found.');
+  const existing = existingRows[0];
 
-    if (name        !== undefined) { fields.push('name = ?');        vals.push(name); }
-    if (description !== undefined) { fields.push('description = ?'); vals.push(description); }
-    if (repo_url    !== undefined) { fields.push('repo_url = ?');    vals.push(repo_url); }
-    if (status      !== undefined) { fields.push('status = ?');      vals.push(status); }
-    if (visibility  !== undefined) { fields.push('visibility = ?');  vals.push(visibility); }
+  const b = req.body || {};
+  const updates = {
+    name:             v.text(b.name, 'Name', 120, { required: b.name !== undefined }),
+    description:      v.text(b.description, 'Description', 10000),
+    repo_url:         v.httpUrl(b.repo_url, 'Repository URL'),
+    status:           v.oneOf(b.status, 'status', v.PROJECT_STATUSES),
+    visibility:       v.oneOf(b.visibility, 'visibility', v.VISIBILITIES),
+    guest_permission: v.oneOf(b.guest_permission, 'guest_permission', v.GUEST_PERMISSIONS)
+  };
+  const password = v.sharePassword(b.share_password);
 
-    if (share_password !== undefined) {
-      if (share_password === '') {
-        fields.push('share_password_hash = ?'); vals.push(null);
-      } else {
-        const hash = await bcrypt.hash(share_password, 10);
-        fields.push('share_password_hash = ?'); vals.push(hash);
-      }
-    }
-
-    if (!fields.length) return res.status(400).json({ error: 'Nothing to update.' });
-
-    vals.push(req.params.id);
-    await db.query(`UPDATE projects SET ${fields.join(', ')} WHERE id = ?`, vals);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: formatDbError(e), code: e?.code || 'INTERNAL' });
+  const fields = [];
+  const vals   = [];
+  for (const [col, val] of Object.entries(updates)) {
+    if (val !== undefined) { fields.push(`${col} = ?`); vals.push(val); }
   }
-});
+  if (password !== undefined) {
+    fields.push('share_password_hash = ?');
+    vals.push(password === null ? null : await bcrypt.hash(password, 10));
+  }
+  if (!fields.length) throw badRequest('Nothing to update.');
+
+  const finalVisibility  = updates.visibility ?? existing.visibility;
+  const finalHasPassword = password === undefined ? Boolean(existing.share_password_hash) : password !== null;
+  if (finalVisibility === 'public' && !finalHasPassword) {
+    throw badRequest('A share password is required for public projects.');
+  }
+
+  // Going private or changing the password logs every guest out.
+  const revokeGuests =
+    (finalVisibility === 'private' && existing.visibility === 'public') || password !== undefined;
+
+  await withTransaction(async conn => {
+    vals.push(id);
+    await conn.query(`UPDATE projects SET ${fields.join(', ')} WHERE id = ?`, vals);
+    if (revokeGuests) await conn.query('DELETE FROM guest_sessions WHERE project_id = ?', [id]);
+  });
+
+  res.json({ ok: true, guests_revoked: revokeGuests });
+}));
 
 // ── Delete project ────────────────────────────────────────────────────────────
-router.delete('/:id', async (req, res) => {
-  if (!req.isWhitelisted) return res.status(403).json({ error: 'FORBIDDEN' });
-  try {
-    await db.query('DELETE FROM projects WHERE id = ?', [req.params.id]);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: formatDbError(e), code: e?.code || 'INTERNAL' });
-  }
-});
+router.delete('/:id', ownerOnly, wrap(async (req, res) => {
+  const id = v.parseId(req.params.id);
+  if (!id) throw notFound('Project not found.');
+  const [r] = await db.query('DELETE FROM projects WHERE id = ?', [id]);
+  if (!r.affectedRows) throw notFound('Project not found.');
+  res.json({ ok: true });
+}));
 
 module.exports = router;
